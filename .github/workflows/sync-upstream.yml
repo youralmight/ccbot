@@ -1,0 +1,115 @@
+name: Sync Upstream
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    # Proxy fallback: uncomment below, comment out claude_code_oauth_token in LLM steps
+    # env:
+    #   ANTHROPIC_AUTH_TOKEN: ${{ secrets.ANTHROPIC_AUTH_TOKEN }}
+    #   ANTHROPIC_BASE_URL: ${{ secrets.ANTHROPIC_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.email "sync-bot@youralmight.com"
+          git config user.name "sync-bot"
+
+      - name: Fetch upstream & rebase
+        id: rebase
+        run: |
+          git remote add upstream https://github.com/six-ddc/ccbot.git
+          git fetch upstream
+          if git rebase upstream/main; then
+            echo "CONFLICT=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "CONFLICT=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push (no conflict)
+        if: steps.rebase.outputs.CONFLICT == 'false'
+        run: git push origin main --force-with-lease
+
+      - name: LLM conflict resolution (attempt 1)
+        id: llm1
+        if: steps.rebase.outputs.CONFLICT == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            This repo is my fork of six-ddc/ccbot. My patches add:
+            - RetryingHTTPXRequest for network resilience (tenacity)
+            - Voice message transcription via OpenAI API
+            - CCBOT_SHOW_TOOL_CALLS / CCBOT_SHOW_USER_MESSAGES env vars
+            - Session resume picker, tmux window sync, markdown table handling
+
+            A `git rebase upstream/main` failed with conflicts.
+            Resolve all conflicts preserving both upstream changes and my patches.
+            For each conflicted file: resolve markers, `git add`, then `git rebase --continue`.
+            Repeat until rebase completes. If truly unresolvable, run `git rebase --abort`.
+            Do NOT use merge. History must stay linear.
+          claude_args: "--max-turns 30"
+
+      - name: LLM conflict resolution (attempt 2)
+        id: llm2
+        if: steps.rebase.outputs.CONFLICT == 'true' && steps.llm1.outcome == 'failure'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            Previous attempt to resolve rebase conflicts failed. The repo may be in a
+            partial rebase state. Run `git rebase --abort` first to reset, then:
+            git rebase upstream/main
+            Resolve all conflicts preserving both upstream changes and my fork patches.
+            For each conflicted file: resolve markers, `git add`, then `git rebase --continue`.
+            If truly unresolvable, run `git rebase --abort`.
+          claude_args: "--max-turns 30"
+
+      - name: LLM conflict resolution (attempt 3)
+        id: llm3
+        if: steps.rebase.outputs.CONFLICT == 'true' && steps.llm2.outcome == 'failure'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          prompt: |
+            Two previous attempts failed. Run `git rebase --abort` first.
+            Then try again: git rebase upstream/main
+            This time, for any file where you cannot confidently resolve the conflict,
+            prefer keeping the upstream version and note which patches were dropped.
+            Resolve markers, `git add`, `git rebase --continue` until done.
+          claude_args: "--max-turns 30"
+
+      - name: Check resolution result
+        id: resolved
+        if: steps.rebase.outputs.CONFLICT == 'true'
+        run: |
+          if [ "${{ steps.llm1.outcome }}" = "success" ] || \
+             [ "${{ steps.llm2.outcome }}" = "success" ] || \
+             [ "${{ steps.llm3.outcome }}" = "success" ]; then
+            echo "OK=true" >> "$GITHUB_OUTPUT"
+          else
+            git rebase --abort || true
+            echo "OK=false" >> "$GITHUB_OUTPUT"
+            echo "::error::All 3 LLM conflict resolution attempts failed"
+            exit 1
+          fi
+
+      - name: Push after LLM resolution
+        if: steps.rebase.outputs.CONFLICT == 'true' && steps.resolved.outputs.OK == 'true'
+        run: git push origin main --force-with-lease

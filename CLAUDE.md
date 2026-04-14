@@ -52,6 +52,26 @@ Or manually in `~/.claude/settings.json`:
 }
 ```
 
+## Network Stability (tenacity retry)
+
+All Telegram API calls are wrapped with tenacity retry on `NetworkError` (covers `TimedOut`, `ConnectError`).
+
+**Configuration** (via `~/.ccbot/.env`):
+```env
+CCBOT_API_RETRIES=3           # Retry attempts (default: 3)
+CCBOT_TELEGRAM_TIMEOUT=10.0   # Connect/read timeout in seconds (default: 10.0)
+```
+
+**Retry behavior**:
+- Exponential backoff: 1s, 2s, 4s, 8s (max)
+- Logs at WARNING level: `tenacity - WARNING - Retrying ... (attempt X/3)`
+- Covers all PTB API calls: `send_message`, `edit_message_text`, `delete_message`, `send_photo`, `get_file`, `download_to_drive`, `unpin_all_forum_topic_messages`, `answer_callback_query`, `send_chat_action`
+- OpenAI `transcribe_voice()` has separate retry for `httpx.TimeoutException` and `httpx.NetworkError`
+
+**Design**: `RetryingHTTPXRequest` subclasses `HTTPXRequest` and wraps `do_request()` — single point of retry, no need to modify individual call sites.
+
+**Testing**: `pytest tests/ccbot/test_request.py tests/ccbot/test_transcribe.py -v` (14 tests)
+
 ## Architecture Details
 
 See @.claude/rules/architecture.md for full system diagram and module inventory.

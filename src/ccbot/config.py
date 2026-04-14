@@ -84,6 +84,12 @@ class Config:
 
         self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
 
+        # Network retry and timeout configuration
+        # CCBOT_API_RETRIES: number of retries after the first attempt for all API calls (default 3)
+        # CCBOT_TELEGRAM_TIMEOUT: connect and read timeout in seconds for Telegram API (default 10.0)
+        self.api_retries = int(os.getenv("CCBOT_API_RETRIES", "3"))
+        self.telegram_timeout = float(os.getenv("CCBOT_TELEGRAM_TIMEOUT", "10.0"))
+
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix
         self.show_user_messages = (

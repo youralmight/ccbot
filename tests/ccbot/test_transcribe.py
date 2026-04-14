@@ -107,6 +107,46 @@ class TestTranscribeVoice:
         url_arg = mock_post.call_args[0][0]
         assert url_arg == "https://proxy.example.com/v1/audio/transcriptions"
 
+    @pytest.mark.asyncio
+    async def test_retries_on_timeout_then_succeeds(self, mock_config):
+        """First 2 attempts fail with TimeoutException, 3rd succeeds."""
+        call_count = 0
+        resp = _mock_response(json_data={"text": "Transcribed"})
+
+        async def mock_post(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise httpx.TimeoutException("Simulated timeout")
+            return resp
+
+        with patch.object(
+            httpx.AsyncClient, "post", new_callable=AsyncMock, side_effect=mock_post
+        ):
+            result = await transcribe.transcribe_voice(b"fake-ogg-data")
+
+        assert result == "Transcribed"
+        assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_reraises_after_max_retries(self, mock_config):
+        """All attempts fail with TimeoutException, exception is re-raised."""
+        call_count = 0
+
+        async def mock_post(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise httpx.TimeoutException("Simulated timeout")
+
+        with patch.object(
+            httpx.AsyncClient, "post", new_callable=AsyncMock, side_effect=mock_post
+        ):
+            with pytest.raises(httpx.TimeoutException):
+                await transcribe.transcribe_voice(b"fake-ogg-data")
+
+        # api_retries defaults to 3, so 4 total attempts (1 + 3 retries)
+        assert call_count == 4
+
 
 class TestCloseClient:
     @pytest.mark.asyncio
