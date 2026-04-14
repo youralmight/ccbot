@@ -1881,9 +1881,16 @@ async def post_shutdown(application: Application) -> None:
 
 
 def create_bot() -> Application:
+    from .request import RetryingHTTPXRequest
+
+    request = RetryingHTTPXRequest(
+        connect_timeout=config.telegram_timeout,
+        read_timeout=config.telegram_timeout,
+    )
     application = (
         Application.builder()
         .token(config.telegram_bot_token)
+        .request(request)
         .rate_limiter(AIORateLimiter(max_retries=5))
         .post_init(post_init)
         .post_shutdown(post_shutdown)
